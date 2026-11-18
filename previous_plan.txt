@@ -1,0 +1,51 @@
+# Task: plan the decision layer (plan only, no code yet)
+
+## Context
+Nordavo take-home: a CLI agent for the Roosterly helpdesk. It reads open tickets
+and sends one decision per ticket: reply (draft in the customer's language),
+handoff (English note for a human) or close (spam or empty only).
+Phase 1 (language detection) is built and tested. Plan phase 2 on top of it.
+
+## Read first
+Read the existing code and the files in data/knowledgebase (
+faq.md). Reuse what exists: HelpdeskClient, Settings, redact_ticket,
+delimit_ticket_text, LanguageAnalyzer, StateStore, example fetching and
+comparison, the Gemini/Groq clients with fallback. Say which ones you checked.
+
+## Constraints
+- Minimal changes. Add a file only if it has its own job or tests.
+  No new frameworks, services, vector DB or agent libraries.
+- Keep be/ (API, state, config) and ai/ (prompts, model calls, policy) separate.
+  ai/ never makes HTTP calls to the helpdesk or reads env vars.
+- Prompts live in ai/prompts.py as plain constants. The FAQ is knowledgebase, kept
+  exactly as given, and goes whole into the decision prompt per ticket each everytime(no retrieval or RAG like!).
+- Ticket text is untrusted data. Redact payment details before storage,
+  prompts and logs.
+- Client rules: answer only from the FAQ; refunds, disputed charges,
+  cancellations, contract changes, GDPR/AVG, security incidents, legal threats
+  and churn threats always go to a human; no card or IBAN in replies or logs;
+  reply in the customer's language; handoff notes in English.
+- A wrong reply is worse than a handoff, but handing off everything fails too.
+
+## Design to plan around (challenge it if the code says otherwise)
+Per ticket: redact -> language (existing) -> policy gate (code, forces handoff
+and a priority floor) -> one decision call (reason first, then category,
+priority, action, faq_ids, draft_reply or handoff_note) -> validator (code)
+-> save decision -> send -> log.
+- Validator: action matches fields, valid FAQ id, no payment data in the draft,
+  Dutch menu names match the FAQ, draft language equals ticket language via
+  LanguageAnalyzer. Any failure becomes a handoff.
+- Sending: save the decision before the POST. 503 retries (nothing was saved),
+  429 waits Retry-After, 409 means done, never retry. A crash in "sending"
+  is checked with GET /tickets/{id} first, then the stored decision is resent
+  with no new model call.
+- Add a verifier or a separate draft call only if the eval shows a need.
+
+## Deliver
+A plan of small slices, each with: goal, files touched (new or changed),
+test, how to verify, and commit message. Suggested order: discovery on the
+30 tickets, decision call with no sending plus eval on the 10 examples,
+gate and validator, POST plus ledger plus one log line per ticket (with
+tokens), final run, one fix with before/after numbers.
+Also list: assumptions, risks, what you would cut if time runs short,
+and questions for me. Do not write code until I approve the plan.

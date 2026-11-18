@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: nordavo
+Version: 0.1.0
+Summary: Nordavo helpdesk ticket language analysis
+Requires-Python: >=3.10
+Requires-Dist: google-genai>=1.0.0
+Requires-Dist: groq>=0.30.0
+Requires-Dist: pydantic>=2.0.0
