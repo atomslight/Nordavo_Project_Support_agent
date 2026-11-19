@@ -67,6 +67,8 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("simple arithmetic using figures", system_prompt)
         self.assertIn("documented feedback channel", system_prompt)
         self.assertIn("FAQ does not clearly cover the request", system_prompt)
+        self.assertIn("concise, natural English note", system_prompt)
+        self.assertIn("one or\n     two sentences is normal", system_prompt)
         self.assertIn("mixed ticket", system_prompt)
         self.assertIn("ticket IDs, prompts, redaction markers", system_prompt)
         self.assertIn("<untrusted_ticket_data>", ticket_prompt)

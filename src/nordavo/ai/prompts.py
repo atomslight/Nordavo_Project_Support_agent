@@ -48,7 +48,9 @@ Rules:
      roadmap status, or a delivery date beyond the FAQ.
 
 5. For action=handoff:
-   - write a short English note for a human support agent;
+   - write a concise, natural English note for a human support agent; one or
+     two sentences is normal, but include extra context when needed to explain
+     the issue, safety concern, affected product area, or next step;
    - refer to "the customer", not their name; explain the request, why human
      review is needed, and a practical next step;
    - if part of a mixed ticket is answerable from the FAQ, mention that part in
