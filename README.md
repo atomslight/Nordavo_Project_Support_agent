@@ -20,6 +20,10 @@ nordavo analyze
 nordavo decide
 nordavo run --send
 nordavo health-check
+
+# Fresh local analysis or decisions (does not touch Helpdesk)
+nordavo analyze --reset
+nordavo decide --reset
 ```
 
 ## What happens when you run it
@@ -70,3 +74,10 @@ The model chooses reply, handoff, or close. A final code check turns malformed,
 payment-leaking, wrong-language, or always-human reply/close decisions into a
 handoff. The decision prompt always receives the full unchanged FAQ—there is
 no RAG or retrieval layer.
+
+## Reset local records
+
+`nordavo analyze --reset` clears the local language cache and both Phase-1
+review tables. `nordavo decide --reset` also clears saved decisions. Reset
+deletes local SQLite rows only: it never changes Helpdesk tickets and is
+blocked for `nordavo run --send` to preserve duplicate-send protection.

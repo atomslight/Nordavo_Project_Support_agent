@@ -50,9 +50,12 @@ def _build_decision_analyzer(settings: Settings, audit=None) -> DecisionAnalyzer
     return DecisionAnalyzer(gemini, groq, audit) if settings.language_primary == "gemini" else DecisionAnalyzer(groq, gemini, audit)
 
 
-def _run_analysis(settings: Settings, audit: RunLog):
+def _run_analysis(settings: Settings, audit: RunLog, *, reset: bool = False):
     state_store = StateStore(settings.database_path)
     try:
+        if reset:
+            state_store.reset_phase_one()
+            audit.event("local_state_reset", stage="cli", outcome="completed")
         workflow = TicketAnalysisWorkflow(
             HelpdeskClient(settings, audit=audit),
             state_store,
@@ -64,10 +67,16 @@ def _run_analysis(settings: Settings, audit: RunLog):
         state_store.close()
 
 
-def _run_decisions(settings: Settings, audit: RunLog, *, send: bool = False):
+def _run_decisions(
+    settings: Settings, audit: RunLog, *, send: bool = False, reset: bool = False
+):
     state_store = StateStore(settings.database_path)
     decision_store = DecisionStateStore(settings.database_path)
     try:
+        if reset:
+            state_store.reset_phase_one()
+            decision_store.reset_decisions()
+            audit.event("local_state_reset", stage="cli", outcome="completed")
         workflow = TicketDecisionWorkflow(
             HelpdeskClient(settings, audit=audit), state_store, decision_store, _build_analyzer(settings, audit),
             _build_decision_analyzer(settings, audit), Path("data/knowledgebase/faq.md"), audit,
@@ -76,6 +85,7 @@ def _run_decisions(settings: Settings, audit: RunLog, *, send: bool = False):
         return summary if not send else type(summary)(
             fetched_tickets=summary.fetched_tickets,
             decided_tickets=summary.decided_tickets,
+            reused_decisions=summary.reused_decisions,
             sent_tickets=workflow.send(),
             language_unresolved_tickets=summary.language_unresolved_tickets,
             unresolved_ticket_ids=summary.unresolved_ticket_ids,
@@ -98,6 +108,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=["analyze", "decide", "run", "health-check"])
     parser.add_argument("--send", action="store_true", help="Allow `run` to send saved decisions.")
     parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete local records before analyze or decide; never available for sending.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Show safe provider diagnostics without ticket text or keys.",
@@ -117,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("`nordavo run` requires --send")
     if args.send and args.command != "run":
         parser.error("--send is only valid with `nordavo run`")
+    if args.reset and args.command not in {"analyze", "decide"}:
+        parser.error("--reset is only valid with `nordavo analyze` or `nordavo decide`")
     if args.show_raw_errors and not args.verbose:
         parser.error("--show-raw-errors requires --verbose")
     if args.show_raw_errors and args.command == "run":
@@ -133,9 +150,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "health-check":
             summary = _run_health_check(settings, audit)
         elif args.command == "analyze":
-            summary = _run_analysis(settings, audit)
+            summary = _run_analysis(settings, audit, reset=args.reset)
         else:
-            summary = _run_decisions(settings, audit, send=args.command == "run")
+            summary = _run_decisions(
+                settings, audit, send=args.command == "run", reset=args.reset
+            )
     except ConfigurationError as error:
         return _fail(audit, "configuration", error, 2)
     except HelpdeskError as error:

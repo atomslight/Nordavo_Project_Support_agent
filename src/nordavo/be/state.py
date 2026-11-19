@@ -127,6 +127,13 @@ class StateStore:
         )
         self._connection.commit()
 
+    def reset_phase_one(self) -> None:
+        """Delete local language state and review rows before a fresh analysis."""
+        self._connection.execute("DELETE FROM ticket_state")
+        self._connection.execute("DELETE FROM language_phase_1_examples")
+        self._connection.execute("DELETE FROM language_phase_1_testing")
+        self._connection.commit()
+
     def save_example_analysis(
         self, ticket: Ticket, assessment: LanguageAssessment
     ) -> None:

@@ -54,6 +54,12 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             cli.main(["run", "--send", "--verbose", "--show-raw-errors"])
 
+    def test_reset_is_rejected_for_sending_and_health_checks(self):
+        with self.assertRaises(SystemExit):
+            cli.main(["run", "--send", "--reset"])
+        with self.assertRaises(SystemExit):
+            cli.main(["health-check", "--reset"])
+
     def test_manual_health_check_checks_both_provider_layers(self):
         language = SimpleNamespace(health_check=lambda: None)
         decision = SimpleNamespace(health_check=lambda: None)

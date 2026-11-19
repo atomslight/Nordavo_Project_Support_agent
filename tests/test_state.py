@@ -64,3 +64,24 @@ class StateStoreTests(unittest.TestCase):
         ]
         self.assertEqual(expected_columns, example_columns)
         self.assertEqual(expected_columns, testing_columns)
+
+    def test_reset_phase_one_clears_all_language_tables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.sqlite3"
+            store = StateStore(path)
+            ticket = Ticket("T1", "now", "email", None, "Subject", "Body")
+            result = LanguageAssessment("nl", 0.95, "gemini", False)
+            store.upsert_fetched(ticket)
+            store.save_example_analysis(ticket, result)
+            store.save_testing_analysis(ticket, result)
+            store.reset_phase_one()
+            counts = [
+                store._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in (
+                    "ticket_state",
+                    "language_phase_1_examples",
+                    "language_phase_1_testing",
+                )
+            ]
+            store.close()
+        self.assertEqual([0, 0, 0], counts)

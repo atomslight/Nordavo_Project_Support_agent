@@ -70,6 +70,11 @@ class DecisionStateStore:
         )
         self._connection.commit()
 
+    def reset_decisions(self) -> None:
+        """Delete saved local decisions before a fresh decision-only run."""
+        self._connection.execute("DELETE FROM ticket_decision")
+        self._connection.commit()
+
     def read_decision(self, row: sqlite3.Row) -> Decision:
         payload = json.loads(row["decision_json"])
         return Decision(

@@ -18,6 +18,7 @@ from nordavo.models import DecisionResult, LanguageAssessment, Ticket
 class DecisionSummary:
     fetched_tickets: int
     decided_tickets: int
+    reused_decisions: int = 0
     sent_tickets: int = 0
     language_unresolved_tickets: int = 0
     unresolved_ticket_ids: tuple[str, ...] = ()
@@ -35,7 +36,7 @@ class TicketDecisionWorkflow:
         self._audit = audit
 
     def decide(self) -> DecisionSummary:
-        fetched = decided = 0
+        fetched = decided = reused = 0
         unresolved_ticket_ids: list[str] = []
         for raw_ticket in self._helpdesk.fetch_open_tickets():
             fetched += 1
@@ -54,6 +55,9 @@ class TicketDecisionWorkflow:
                 continue
             existing = self._decisions.get_current(safe_ticket)
             if existing is not None and existing["status"] in {"decided", "sending", "sent", "already_handled"}:
+                # A matching saved decision is safe to reuse; do not spend
+                # another model call just to recreate the same ticket action.
+                reused += 1
                 continue
             result = self._analyzer.decide(safe_ticket, language.language, self._faq_text)
             result = replace(result, decision=replace(result.decision, language=language.language))
@@ -65,7 +69,7 @@ class TicketDecisionWorkflow:
                         input_tokens=result.input_tokens, output_tokens=result.output_tokens)
             decided += 1
         return DecisionSummary(
-            fetched, decided,
+            fetched, decided, reused,
             language_unresolved_tickets=len(unresolved_ticket_ids),
             unresolved_ticket_ids=tuple(unresolved_ticket_ids),
         )

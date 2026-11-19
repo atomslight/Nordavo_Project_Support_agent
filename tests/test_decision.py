@@ -160,6 +160,41 @@ class DecisionTests(unittest.TestCase):
                 language_state.close()
         self.assertEqual(1, summary.decided_tickets)
 
+    def test_second_run_reports_a_reused_saved_decision(self):
+        class Helpdesk:
+            def fetch_open_tickets(self):
+                yield ticket()
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            language_state = StateStore(db_path)
+            decision_state = DecisionStateStore(db_path)
+            try:
+                workflow = TicketDecisionWorkflow(
+                    Helpdesk(), language_state, decision_state, FakeLanguage(),
+                    DecisionAnalyzer(FakeDecision(result()), FakeDecision(result())),
+                    Path("data/knowledgebase/faq.md"),
+                )
+                workflow.decide()
+                summary = workflow.decide()
+            finally:
+                decision_state.close()
+                language_state.close()
+        self.assertEqual(0, summary.decided_tickets)
+        self.assertEqual(1, summary.reused_decisions)
+
+    def test_reset_decisions_deletes_only_the_local_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            decisions = DecisionStateStore(db_path)
+            try:
+                decisions.save_decided(ticket(), result(), LanguageAssessment("nl", 0.9, "gemini", False))
+                decisions.reset_decisions()
+                stored = decisions.get_current(ticket())
+            finally:
+                decisions.close()
+        self.assertIsNone(stored)
+
     def test_unknown_language_is_saved_and_other_tickets_continue(self):
         second_ticket = Ticket("T2", "", "email", None, "Vraag", "Nog een vraag")
 
