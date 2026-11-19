@@ -53,3 +53,16 @@ class CliTests(unittest.TestCase):
     def test_raw_errors_are_rejected_for_sending(self):
         with self.assertRaises(SystemExit):
             cli.main(["run", "--send", "--verbose", "--show-raw-errors"])
+
+    def test_manual_health_check_checks_both_provider_layers(self):
+        language = SimpleNamespace(health_check=lambda: None)
+        decision = SimpleNamespace(health_check=lambda: None)
+        with (
+            patch("nordavo.cli._build_analyzer", return_value=language) as build_language,
+            patch("nordavo.cli._build_decision_analyzer", return_value=decision) as build_decision,
+        ):
+            result = cli._run_health_check(SimpleNamespace(), SimpleNamespace())
+
+        self.assertEqual({"decision": "healthy", "language": "healthy"}, result)
+        build_language.assert_called_once()
+        build_decision.assert_called_once()

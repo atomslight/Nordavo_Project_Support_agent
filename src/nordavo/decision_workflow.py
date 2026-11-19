@@ -19,7 +19,6 @@ class DecisionSummary:
     fetched_tickets: int
     decided_tickets: int
     sent_tickets: int = 0
-    example_metrics: dict[str, dict[str, int]] | None = None
     language_unresolved_tickets: int = 0
     unresolved_ticket_ids: tuple[str, ...] = ()
 
@@ -36,10 +35,6 @@ class TicketDecisionWorkflow:
         self._audit = audit
 
     def decide(self) -> DecisionSummary:
-        self._languages.health_check()
-        self._analyzer.health_check()
-        example_metrics = self._evaluate_examples()
-        self._event("examples_evaluated", stage="decision", outcome="completed")
         fetched = decided = 0
         unresolved_ticket_ids: list[str] = []
         for raw_ticket in self._helpdesk.fetch_open_tickets():
@@ -70,33 +65,10 @@ class TicketDecisionWorkflow:
                         input_tokens=result.input_tokens, output_tokens=result.output_tokens)
             decided += 1
         return DecisionSummary(
-            fetched, decided, example_metrics=example_metrics,
+            fetched, decided,
             language_unresolved_tickets=len(unresolved_ticket_ids),
             unresolved_ticket_ids=tuple(unresolved_ticket_ids),
         )
-
-    def _evaluate_examples(self) -> dict[str, dict[str, int]]:
-        fields = ("language", "action", "category", "priority")
-        matches = {field: 0 for field in fields}
-        total = 0
-        for example in self._helpdesk.fetch_examples():
-            label = example.get("label", {})
-            if not isinstance(label, dict):
-                continue
-            raw_ticket = Ticket.from_api(example)
-            ticket = redact_ticket(raw_ticket)
-            language = self._languages.analyze(f"{ticket.subject}\n{ticket.body}")
-            result = self._analyzer.decide(ticket, language.language, self._faq_text)
-            result = replace(result, decision=replace(result.decision, language=language.language))
-            decision = validate_decision(result, ticket, language, self._languages).decision
-            total += 1
-            predicted = {
-                "language": language.language, "action": decision.action,
-                "category": decision.category, "priority": decision.priority,
-            }
-            for field in fields:
-                matches[field] += int(predicted[field] == label.get(field))
-        return {field: {"matches": matches[field], "total": total} for field in fields}
 
     def _language_for(self, ticket: Ticket) -> LanguageAssessment:
         row = self._state.get(ticket.id)

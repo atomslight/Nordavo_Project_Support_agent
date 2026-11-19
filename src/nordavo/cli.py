@@ -26,7 +26,6 @@ from nordavo.be.config import (
 )
 from nordavo.be.helpdesk import HelpdeskClient, HelpdeskError
 from nordavo.be.decision_state import DecisionStateStore
-from nordavo.be.report import LanguageCsvReport
 from nordavo.be.run_log import RunLog
 from nordavo.be.state import StateStore
 from nordavo.workflow import TicketAnalysisWorkflow
@@ -58,7 +57,6 @@ def _run_analysis(settings: Settings, audit: RunLog):
             HelpdeskClient(settings, audit=audit),
             state_store,
             _build_analyzer(settings, audit),
-            LanguageCsvReport(Path("output/language_results.csv")),
             audit,
         )
         return workflow.run()
@@ -79,7 +77,6 @@ def _run_decisions(settings: Settings, audit: RunLog, *, send: bool = False):
             fetched_tickets=summary.fetched_tickets,
             decided_tickets=summary.decided_tickets,
             sent_tickets=workflow.send(),
-            example_metrics=summary.example_metrics,
             language_unresolved_tickets=summary.language_unresolved_tickets,
             unresolved_ticket_ids=summary.unresolved_ticket_ids,
         )
@@ -88,9 +85,17 @@ def _run_decisions(settings: Settings, audit: RunLog, *, send: bool = False):
         state_store.close()
 
 
+def _run_health_check(settings: Settings, audit: RunLog) -> dict[str, str]:
+    # This is intentionally manual so normal ticket commands do not spend four
+    # provider calls on every run. It makes readiness easy to check on demand.
+    _build_analyzer(settings, audit).health_check()
+    _build_decision_analyzer(settings, audit).health_check()
+    return {"decision": "healthy", "language": "healthy"}
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Analyze or decide Helpdesk tickets.")
-    parser.add_argument("command", choices=["analyze", "decide", "run"])
+    parser = argparse.ArgumentParser(description="Analyze, decide, send, or health-check Helpdesk tickets.")
+    parser.add_argument("command", choices=["analyze", "decide", "run", "health-check"])
     parser.add_argument("--send", action="store_true", help="Allow `run` to send saved decisions.")
     parser.add_argument(
         "--debug",
@@ -116,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--show-raw-errors requires --verbose")
     if args.show_raw_errors and args.command == "run":
         parser.error("--show-raw-errors is not allowed with `nordavo run --send`")
-    if args.command not in {"analyze", "decide", "run"}:
+    if args.command not in {"analyze", "decide", "run", "health-check"}:
         return 2
     if args.debug or args.verbose:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
@@ -125,7 +130,12 @@ def main(argv: list[str] | None = None) -> int:
     audit.event("run_started", stage="cli")
     try:
         settings = Settings.from_environment()
-        summary = _run_analysis(settings, audit) if args.command == "analyze" else _run_decisions(settings, audit, send=args.command == "run")
+        if args.command == "health-check":
+            summary = _run_health_check(settings, audit)
+        elif args.command == "analyze":
+            summary = _run_analysis(settings, audit)
+        else:
+            summary = _run_decisions(settings, audit, send=args.command == "run")
     except ConfigurationError as error:
         return _fail(audit, "configuration", error, 2)
     except HelpdeskError as error:
@@ -136,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(audit, "decision", error, 5)
 
     audit.event("run_finished", stage="cli", outcome="completed")
-    print(json.dumps(summary.__dict__, sort_keys=True))
+    print(json.dumps(summary if isinstance(summary, dict) else summary.__dict__, sort_keys=True))
     return 0
 
 

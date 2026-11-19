@@ -45,6 +45,11 @@ class FakeDecision:
         return self.value
 
 
+class FailingHealthDecision(FakeDecision):
+    def health_check(self):
+        raise AssertionError("workflow must not run health checks")
+
+
 class DecisionTests(unittest.TestCase):
     def test_prompt_renders_literal_json_and_only_expected_placeholders(self):
         system_prompt, ticket_prompt = _prompts(ticket(), "nl", "F01: Add a person")
@@ -108,7 +113,7 @@ class DecisionTests(unittest.TestCase):
     def test_workflow_persists_a_decision_without_sending(self):
         class Helpdesk:
             def fetch_examples(self):
-                return []
+                raise AssertionError("decide must not fetch labelled examples")
 
             def fetch_open_tickets(self):
                 yield ticket()
@@ -130,6 +135,30 @@ class DecisionTests(unittest.TestCase):
                 language_state.close()
         self.assertEqual(1, summary.decided_tickets)
         self.assertEqual("decided", stored["status"])
+
+    def test_decide_does_not_run_provider_health_checks(self):
+        class Helpdesk:
+            def fetch_open_tickets(self):
+                yield ticket()
+
+        class FailingHealthLanguage(FakeLanguage):
+            def health_check(self):
+                raise AssertionError("workflow must not run health checks")
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            language_state = StateStore(db_path)
+            decision_state = DecisionStateStore(db_path)
+            try:
+                summary = TicketDecisionWorkflow(
+                    Helpdesk(), language_state, decision_state, FailingHealthLanguage(),
+                    DecisionAnalyzer(FailingHealthDecision(result()), FailingHealthDecision(result())),
+                    Path("data/knowledgebase/faq.md"),
+                ).decide()
+            finally:
+                decision_state.close()
+                language_state.close()
+        self.assertEqual(1, summary.decided_tickets)
 
     def test_unknown_language_is_saved_and_other_tickets_continue(self):
         second_ticket = Ticket("T2", "", "email", None, "Vraag", "Nog een vraag")

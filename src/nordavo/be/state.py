@@ -33,6 +33,40 @@ class StateStore:
             )
             """
         )
+        # ticket_state remains the cache that lets the decision workflow reuse
+        # language results; the two tables below are simple Phase-1 review views.
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS language_phase_1_examples (
+                ticket_id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                customer_plan TEXT,
+                original_subject TEXT NOT NULL,
+                original_body TEXT NOT NULL,
+                language TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source TEXT NOT NULL,
+                fallback_used INTEGER NOT NULL
+            )
+            """
+        )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS language_phase_1_testing (
+                ticket_id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                customer_plan TEXT,
+                original_subject TEXT NOT NULL,
+                original_body TEXT NOT NULL,
+                language TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source TEXT NOT NULL,
+                fallback_used INTEGER NOT NULL
+            )
+            """
+        )
         self._connection.commit()
 
     def close(self) -> None:
@@ -93,10 +127,57 @@ class StateStore:
         )
         self._connection.commit()
 
+    def save_example_analysis(
+        self, ticket: Ticket, assessment: LanguageAssessment
+    ) -> None:
+        self._save_phase_one_result("language_phase_1_examples", ticket, assessment)
+
+    def save_testing_analysis(
+        self, ticket: Ticket, assessment: LanguageAssessment
+    ) -> None:
+        self._save_phase_one_result("language_phase_1_testing", ticket, assessment)
+
     def get(self, ticket_id: str) -> sqlite3.Row | None:
         return self._connection.execute(
             "SELECT * FROM ticket_state WHERE ticket_id=?", (ticket_id,)
         ).fetchone()
+
+    def _save_phase_one_result(
+        self, table: str, ticket: Ticket, assessment: LanguageAssessment
+    ) -> None:
+        # These review tables keep the requested column names, but callers pass
+        # only the redacted Ticket that is safe to store locally.
+        self._connection.execute(
+            f"""
+            INSERT INTO {table} (
+                ticket_id, received_at, channel, customer_plan, original_subject,
+                original_body, language, confidence, source, fallback_used
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticket_id) DO UPDATE SET
+                received_at=excluded.received_at,
+                channel=excluded.channel,
+                customer_plan=excluded.customer_plan,
+                original_subject=excluded.original_subject,
+                original_body=excluded.original_body,
+                language=excluded.language,
+                confidence=excluded.confidence,
+                source=excluded.source,
+                fallback_used=excluded.fallback_used
+            """,
+            (
+                ticket.id,
+                ticket.received_at,
+                ticket.channel,
+                ticket.customer_plan,
+                ticket.subject,
+                ticket.body,
+                assessment.language,
+                assessment.confidence,
+                assessment.source,
+                int(assessment.fallback_used),
+            ),
+        )
+        self._connection.commit()
 
 
 def _content_hash(subject: str, body: str) -> str:

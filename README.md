@@ -19,17 +19,16 @@ $env:LANGUAGE_FALLBACK = "groq"
 nordavo analyze
 nordavo decide
 nordavo run --send
+nordavo health-check
 ```
 
 ## What happens when you run it
 
-1. `cli.py` reads the `analyze` command and your environment settings.
-2. `be/helpdesk.py` fetches every open ticket, following pagination cursors.
-3. `workflow.py` redacts payment data, detects the language, saves safe state,
-   and prepares the report rows.
-4. `be/state.py` saves only redacted ticket text and language results in SQLite.
-5. `be/report.py` replaces `output/language_results.csv` only after a complete,
-   successful run.
+1. Run `nordavo health-check` when you want to verify both providers before work.
+2. `nordavo analyze` fetches the examples and every open ticket, following cursors.
+3. It ignores example labels, redacts payment data, and detects language.
+4. `nordavo decide` processes only open tickets and never fetches examples.
+5. `nordavo run --send` decides first, then sends only saved decisions.
 
 The language code lives in `ai/`. `ai/language.py` contains the Gemini and
 Groq requests, then chooses the configured provider order. `ai/safety.py`
@@ -42,19 +41,17 @@ primary provider. Groq (`GROQ_MODEL`, default `qwen/qwen3.8-27b`) is the
 default fallback. Set `LANGUAGE_PRIMARY` and `LANGUAGE_FALLBACK` to reverse
 the order; use only `gemini` or `groq`, and keep the values different.
 
-Both providers are checked before ticket processing. Each receives only
-redacted, untrusted ticket text. If both fail for a ticket, analysis stops
-without replacing the previous CSV report.
+Run `nordavo health-check` to check both providers before processing tickets.
+Each receives only redacted, untrusted ticket text. During normal work, if
+both providers fail for a ticket, that command stops safely.
 
 ## Data and privacy
 
-The SQLite database stores only redacted ticket text. Set `NORDAVO_DB_PATH` to
-put that database elsewhere.
-
-`output/language_results.csv` intentionally contains the original subject and
-body because it is for your local review. It may contain sensitive customer
-data: it is ignored by Git and must not be committed, uploaded, or shared
-outside the authorized project team.
+The SQLite database stores only redacted ticket text. `ticket_state` is the
+language cache used by decisions. `language_phase_1_examples` stores the ten
+example predictions and `language_phase_1_testing` stores open-ticket language
+predictions. Example labels are never stored or compared. Set
+`NORDAVO_DB_PATH` to put that database elsewhere.
 
 ## Decisions and sending
 
@@ -71,6 +68,5 @@ visible `send_failed` ledger row. Each attempt writes one safe JSON line to
 
 The model chooses reply, handoff, or close. A final code check turns malformed,
 payment-leaking, wrong-language, or always-human reply/close decisions into a
-handoff. Example metrics compare language, action, category, and priority;
-they appear in the command summary. The decision prompt always receives the
-full unchanged FAQ—there is no RAG or retrieval layer.
+handoff. The decision prompt always receives the full unchanged FAQ—there is
+no RAG or retrieval layer.

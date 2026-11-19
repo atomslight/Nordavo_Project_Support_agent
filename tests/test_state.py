@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from nordavo.be.state import StateStore
@@ -30,3 +31,36 @@ class StateStoreTests(unittest.TestCase):
             store.close()
         self.assertEqual("analyzed", row["status"])
         self.assertEqual("nl", row["language"])
+
+    def test_phase_one_review_tables_store_the_requested_redacted_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.sqlite3"
+            store = StateStore(path)
+            example = Ticket("E1", "now", "email", "Plus", "Subject", "<REDACTED_CARD>")
+            testing = Ticket("T1", "now", "form", None, "Vraag", "Body")
+            result = LanguageAssessment("nl", 0.95, "gemini", False)
+            store.save_example_analysis(example, result)
+            store.save_testing_analysis(testing, result)
+            store.close()
+            connection = sqlite3.connect(path)
+            example_row = connection.execute(
+                "SELECT ticket_id, original_body, language FROM language_phase_1_examples"
+            ).fetchone()
+            testing_row = connection.execute(
+                "SELECT ticket_id, channel, fallback_used FROM language_phase_1_testing"
+            ).fetchone()
+            example_columns = [
+                row[1] for row in connection.execute("PRAGMA table_info(language_phase_1_examples)")
+            ]
+            testing_columns = [
+                row[1] for row in connection.execute("PRAGMA table_info(language_phase_1_testing)")
+            ]
+            connection.close()
+        self.assertEqual(("E1", "<REDACTED_CARD>", "nl"), example_row)
+        self.assertEqual(("T1", "form", 0), testing_row)
+        expected_columns = [
+            "ticket_id", "received_at", "channel", "customer_plan", "original_subject",
+            "original_body", "language", "confidence", "source", "fallback_used",
+        ]
+        self.assertEqual(expected_columns, example_columns)
+        self.assertEqual(expected_columns, testing_columns)
