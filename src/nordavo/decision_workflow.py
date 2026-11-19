@@ -98,10 +98,18 @@ class TicketDecisionWorkflow:
         for row in self._decisions.pending():
             decision = self._decisions.read_decision(row)
             result = DecisionResult(decision, row["provider"], row["model"], bool(row["fallback_used"]), row["input_tokens"], row["output_tokens"])
-            if row["status"] == "sending" and self._helpdesk.ticket_is_handled(row["ticket_id"]):
-                self._decisions.mark(row["ticket_id"], "already_handled")
-                log.write(row["ticket_id"], result, "already_handled")
-                continue
+            if row["status"] == "sending":
+                try:
+                    already_handled = self._helpdesk.ticket_is_handled(row["ticket_id"])
+                except HelpdeskError as error:
+                    if error.status == 404:
+                        self._mark_send_failed(row["ticket_id"], result, log, error)
+                        continue
+                    raise
+                if already_handled:
+                    self._decisions.mark(row["ticket_id"], "already_handled")
+                    log.write(row["ticket_id"], result, "already_handled")
+                    continue
             # Commit before POST. A crash can then recover this exact decision
             # without asking a model to create a different customer response.
             self._decisions.mark(row["ticket_id"], "sending")
@@ -110,12 +118,11 @@ class TicketDecisionWorkflow:
             try:
                 outcome = self._helpdesk.send_decision(row["ticket_id"], decision)
             except HelpdeskError as error:
-                # 400/422 are definite validation failures. Other failures may
-                # have reached the server, so keep `sending` for GET recovery.
-                if error.status in {400, 422}:
-                    self._decisions.mark(row["ticket_id"], "send_failed")
-                    log.write(row["ticket_id"], result, "send_failed", f"HTTP {error.status}")
+                if _is_ticket_request_error(error):
+                    self._mark_send_failed(row["ticket_id"], result, log, error)
                     continue
+                # An uncertain failure stays `sending` so recovery checks the
+                # Helpdesk before it ever retries the stored customer action.
                 log.write(row["ticket_id"], result, "sending", type(error).__name__)
                 raise
             status = "already_handled" if outcome == "already_handled" else "sent"
@@ -123,6 +130,13 @@ class TicketDecisionWorkflow:
             log.write(row["ticket_id"], result, status)
             sent += int(status == "sent")
         return sent
+
+    def _mark_send_failed(self, ticket_id: str, result: DecisionResult, log: RunLog, error: HelpdeskError) -> None:
+        self._decisions.mark(ticket_id, "send_failed")
+        log.write(
+            ticket_id, result, "send_failed", f"HTTP {error.status}",
+            code=error.code, problem_fields=error.problem_fields,
+        )
 
     def _event(self, name: str, **details) -> None:
         if self._audit:
@@ -134,6 +148,12 @@ def _is_empty_ticket(ticket: Ticket) -> bool:
     return not ticket.body.strip() and (
         not subject or _REPLY_ONLY_SUBJECT.fullmatch(subject) is not None
     )
+
+
+def _is_ticket_request_error(error: HelpdeskError) -> bool:
+    if error.status == 404 or error.status == 422:
+        return True
+    return error.status == 400 and error.code in {"invalid_json", "bad_request"}
 
 
 def _rule_close(reason: str, model: str) -> DecisionResult:

@@ -15,7 +15,7 @@ from nordavo.models import DecisionResult
 _SAFE_FIELDS = {
     "action", "category", "code", "command", "delay_seconds", "error_type",
     "input_tokens", "model", "outcome", "output_tokens", "priority", "provider",
-    "stage", "status", "ticket_id", "method", "endpoint", "confidence",
+    "stage", "status", "ticket_id", "method", "endpoint", "confidence", "problem_fields",
 }
 
 
@@ -69,12 +69,22 @@ class RunLog:
             print("RAW DEBUG ERROR — may contain customer data; do not share it.", file=sys.stderr)
             print(_raw_error_text(error), file=sys.stderr)
 
-    def write(self, ticket_id: str, result: DecisionResult, outcome: str, error: str | None = None) -> None:
+    def write(
+        self,
+        ticket_id: str,
+        result: DecisionResult,
+        outcome: str,
+        error_type: str | None = None,
+        *,
+        code: str | None = None,
+        problem_fields: tuple[str, ...] = (),
+    ) -> None:
         self.event(
             "send_finished", ticket_id=ticket_id, action=result.decision.action,
             category=result.decision.category, priority=result.decision.priority,
             provider=result.provider, model=result.model, input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens, outcome=outcome, error_type=error,
+            output_tokens=result.output_tokens, outcome=outcome, error_type=error_type,
+            code=code, problem_fields=list(problem_fields),
         )
 
 
@@ -85,6 +95,12 @@ def _safe_error_details(error: Exception) -> dict[str, object]:
         value = getattr(error, field, None)
         if isinstance(value, (str, int)):
             details[field] = value
+    problem_fields = getattr(error, "problem_fields", ())
+    if isinstance(problem_fields, tuple) and all(
+        isinstance(name, str) and name.replace("_", "").replace(".", "").replace("-", "").isalnum()
+        for name in problem_fields
+    ):
+        details["problem_fields"] = list(problem_fields)
     return details
 
 

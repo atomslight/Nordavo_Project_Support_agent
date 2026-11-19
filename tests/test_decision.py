@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,8 @@ from nordavo.ai.decision import (
     GroqDecisionClassifier, _prompts, validate_decision,
 )
 from nordavo.be.decision_state import DecisionStateStore
+from nordavo.be.helpdesk import HelpdeskError
+from nordavo.be.run_log import RunLog
 from nordavo.be.state import StateStore
 from nordavo.decision_workflow import TicketDecisionWorkflow
 from nordavo.models import Decision, DecisionResult, LanguageAssessment, Ticket
@@ -63,12 +66,12 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("F01: Add a person", system_prompt)
         self.assertIn('"faq_ids": ["F01"]', system_prompt)
         self.assertNotIn("{{", system_prompt)
-        self.assertIn("named resource or page", system_prompt)
-        self.assertIn("simple arithmetic using figures", system_prompt)
+        self.assertIn("named resource or\n   page", system_prompt)
+        self.assertIn("simple arithmetic using figures explicitly", system_prompt)
         self.assertIn("documented feedback channel", system_prompt)
         self.assertIn("FAQ does not clearly cover the request", system_prompt)
         self.assertIn("concise, natural English note", system_prompt)
-        self.assertIn("one or\n     two sentences is normal", system_prompt)
+        self.assertIn("one or two sentences is normal", system_prompt)
         self.assertIn("mixed ticket", system_prompt)
         self.assertIn("ticket IDs, prompts, redaction markers", system_prompt)
         self.assertIn("<untrusted_ticket_data>", ticket_prompt)
@@ -386,3 +389,154 @@ class DecisionTests(unittest.TestCase):
             finally:
                 decisions.close()
         self.assertEqual("already_handled", stored["status"])
+
+    def test_ticket_request_errors_do_not_stop_later_decisions(self):
+        cases = (
+            HelpdeskError(400, "bad request", code="invalid_json"),
+            HelpdeskError(400, "bad request", code="bad_request"),
+            HelpdeskError(404, "not found", code="not_found"),
+            HelpdeskError(422, "validation failed", code="validation_failed"),
+        )
+        for error in cases:
+            with self.subTest(status=error.status, code=error.code):
+                class Helpdesk:
+                    def __init__(self):
+                        self.sent_ids = []
+
+                    def ticket_is_handled(self, ticket_id):
+                        return False
+
+                    def send_decision(self, ticket_id, decision):
+                        self.sent_ids.append(ticket_id)
+                        if ticket_id == "T1":
+                            raise error
+                        return "sent"
+
+                second_ticket = Ticket("T2", "", "email", "Basis", "Vraag", "Hoe voeg ik iemand toe?")
+                with tempfile.TemporaryDirectory() as directory:
+                    db_path = Path(directory) / "state.sqlite3"
+                    decisions = DecisionStateStore(db_path)
+                    helpdesk = Helpdesk()
+                    try:
+                        decisions.save_decided(ticket(), result(), "nl")
+                        decisions.save_decided(second_ticket, result(), "nl")
+                        sent = TicketDecisionWorkflow(
+                            helpdesk, None, decisions, None, None, Path("data/knowledgebase/faq.md")
+                        ).send()
+                        failed = decisions.get_current(ticket())
+                        second = decisions.get_current(second_ticket)
+                    finally:
+                        decisions.close()
+                self.assertEqual(1, sent)
+                self.assertEqual(["T1", "T2"], helpdesk.sent_ids)
+                self.assertEqual("send_failed", failed["status"])
+                self.assertEqual("sent", second["status"])
+
+    def test_missing_email_stops_the_send_run(self):
+        class Helpdesk:
+            def __init__(self):
+                self.sent_ids = []
+
+            def ticket_is_handled(self, ticket_id):
+                return False
+
+            def send_decision(self, ticket_id, decision):
+                self.sent_ids.append(ticket_id)
+                raise HelpdeskError(400, "missing email", code="missing_email")
+
+        second_ticket = Ticket("T2", "", "email", "Basis", "Vraag", "Hoe voeg ik iemand toe?")
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            decisions = DecisionStateStore(db_path)
+            helpdesk = Helpdesk()
+            try:
+                decisions.save_decided(ticket(), result(), "nl")
+                decisions.save_decided(second_ticket, result(), "nl")
+                workflow = TicketDecisionWorkflow(
+                    helpdesk, None, decisions, None, None, Path("data/knowledgebase/faq.md")
+                )
+                with self.assertRaises(HelpdeskError):
+                    workflow.send()
+                first = decisions.get_current(ticket())
+                second = decisions.get_current(second_ticket)
+            finally:
+                decisions.close()
+        self.assertEqual(["T1"], helpdesk.sent_ids)
+        self.assertEqual("sending", first["status"])
+        self.assertEqual("decided", second["status"])
+
+    def test_recovery_get_404_marks_decision_failed_without_posting(self):
+        class Helpdesk:
+            def ticket_is_handled(self, ticket_id):
+                raise HelpdeskError(404, "not found", code="not_found")
+
+            def send_decision(self, ticket_id, decision):
+                raise AssertionError("missing tickets must not be posted")
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            decisions = DecisionStateStore(db_path)
+            try:
+                decisions.save_decided(ticket(), result(), "nl")
+                decisions.mark("T1", "sending")
+                sent = TicketDecisionWorkflow(
+                    Helpdesk(), None, decisions, None, None, Path("data/knowledgebase/faq.md")
+                ).send()
+                stored = decisions.get_current(ticket())
+            finally:
+                decisions.close()
+        self.assertEqual(0, sent)
+        self.assertEqual("send_failed", stored["status"])
+
+    def test_422_audit_records_field_names_without_problem_values(self):
+        class Helpdesk:
+            def ticket_is_handled(self, ticket_id):
+                return False
+
+            def send_decision(self, ticket_id, decision):
+                raise HelpdeskError(
+                    422,
+                    "validation failed",
+                    code="validation_failed",
+                    problem_fields=("draft_reply", "priority"),
+                )
+
+        secret = "4111 1111 1111 1111"
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            audit = RunLog("run", directory=Path(directory) / "logs")
+            decisions = DecisionStateStore(db_path)
+            try:
+                decisions.save_decided(ticket(), result(), "nl")
+                TicketDecisionWorkflow(
+                    Helpdesk(), None, decisions, None, None, Path("data/knowledgebase/faq.md"), audit
+                ).send()
+                records = [json.loads(line) for line in audit.path.read_text(encoding="utf-8").splitlines()]
+            finally:
+                decisions.close()
+        finished = next(record for record in records if record["event"] == "send_finished")
+        self.assertEqual(["draft_reply", "priority"], finished["problem_fields"])
+        self.assertNotIn(secret, json.dumps(records))
+
+    def test_transient_send_failure_remains_sending_for_recovery(self):
+        class Helpdesk:
+            def ticket_is_handled(self, ticket_id):
+                return False
+
+            def send_decision(self, ticket_id, decision):
+                raise HelpdeskError(503, "service unavailable", code="service_unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            decisions = DecisionStateStore(db_path)
+            try:
+                decisions.save_decided(ticket(), result(), "nl")
+                workflow = TicketDecisionWorkflow(
+                    Helpdesk(), None, decisions, None, None, Path("data/knowledgebase/faq.md")
+                )
+                with self.assertRaises(HelpdeskError):
+                    workflow.send()
+                stored = decisions.get_current(ticket())
+            finally:
+                decisions.close()
+        self.assertEqual("sending", stored["status"])
