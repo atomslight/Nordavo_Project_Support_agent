@@ -1,0 +1,1 @@
+{"model":"qwen/qwen3.8-27b","messages":[{"role":"user","content":"Reply with OK only"}],"temperature":0.5,"reasoning_effort":"none","reasoning_format":"hidden"}

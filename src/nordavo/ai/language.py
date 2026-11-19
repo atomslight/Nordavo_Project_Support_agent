@@ -107,7 +107,7 @@ class GroqLanguageClassifier:
                 model=self._model,
                 reasoning_effort="none",
                 reasoning_format="hidden",
-                temperature=0.6,
+                temperature=0.5,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
             )

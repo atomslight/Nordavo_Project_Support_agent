@@ -108,7 +108,7 @@ class GroqDecisionClassifier:
                 model=self._model,
                 reasoning_effort="none",
                 reasoning_format="hidden",
-                temperature=0.6,
+                temperature=0.5,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": ticket_prompt},

@@ -105,6 +105,12 @@ def _safe_error_details(error: Exception) -> dict[str, object]:
 
 
 def _raw_error_text(error: Exception) -> str:
-    """Terminal-only diagnostics; callers never write this text to JSONL."""
-    raw_error = getattr(error, "raw_error", error)
-    return "".join(traceback.format_exception(type(raw_error), raw_error, raw_error.__traceback__)).rstrip()
+    """Format the original error, falling back to the safe wrapper."""
+    raw_error = getattr(error, "raw_error", None) or error
+    return "".join(
+        traceback.format_exception(
+            type(raw_error),
+            raw_error,
+            raw_error.__traceback__,
+        )
+    ).rstrip()

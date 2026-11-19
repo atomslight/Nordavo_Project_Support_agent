@@ -1,83 +1,45 @@
-# Nordavo support agent
+# Nordavo — AI Support Ticket Agent
 
-The first feature records language analysis. Phase 2 adds a separate decision
-ledger: review decisions with `decide`, then explicitly send them with `run --send`.
+Nordavo is a Python command-line support agent for Roosterly. It reads helpdesk tickets, checks the supplied FAQ, and prepares a **reply, human handoff, or spam closure**. Decisions are reviewed and saved locally before any customer-facing action is explicitly authorized.
 
-## Run
+## How to run
+
+Requires **Python 3.10+**, [uv](https://docs.astral.sh/uv/), Helpdesk access, and Gemini/Groq API keys. From PowerShell:
 
 ```powershell
+git clone https://github.com/atomslight/Nordavo_Project_Support_agent.git
+cd Nordavo_Project_Support_agent
 uv venv .venv
 .\.venv\Scripts\Activate.ps1
 uv pip install -e .
-$env:HELPDESK_BASE_URL = "https://nakywgkztvzkihdjnwbc.supabase.co/functions/v1/helpdesk"
-$env:HELPDESK_API_KEY = "..."
-$env:CANDIDATE_EMAIL = "you@example.com"
-$env:GEMINI_API_KEY = "..."
-$env:GROQ_API_KEY = "..."
-$env:LANGUAGE_PRIMARY = "gemini"
-$env:LANGUAGE_FALLBACK = "groq"
-nordavo analyze
-nordavo decide
-nordavo run --send
+Copy-Item .env.example .env
+# Edit .env: set your own CANDIDATE_EMAIL and API keys.
+python -m unittest discover -s tests -v
 nordavo health-check
-
-# Fresh local analysis or decisions (does not touch Helpdesk)
-nordavo analyze --reset
-nordavo decide --reset
+nordavo analyze
+nordavo decide --verbose
 ```
 
-## What happens when you run it
+`analyze` detects languages; `decide` saves proposed actions **without sending**. Only `nordavo run --send` submits actions to the Helpdesk—use it only when authorized. The FAQ must exist at `data/knowledgebase/faq.md` (not included in the reviewed uploads).
 
-1. Run `nordavo health-check` when you want to verify both providers before work.
-2. `nordavo analyze` fetches the examples and every open ticket, following cursors.
-3. It ignores example labels, redacts payment data, and detects language.
-4. `nordavo decide` processes only open tickets and never fetches examples.
-5. `nordavo run --send` decides first, then sends only saved decisions.
+## Decisions
 
-The language code lives in `ai/`. `ai/language.py` contains the Gemini and
-Groq requests, then chooses the configured provider order. `ai/safety.py`
-redacts payment details and marks ticket text as untrusted data in prompts.
+1. **Dutch-first, multilingual support:** detect Dutch, English, or German separately, then verify reply language; human handoff notes stay in English.
+2. **FAQ-grounded decisions:** send the full supplied FAQ to the model; validate its structured output and treat customer text as untrusted to reduce unsupported answers and prompt injection.
+3. **Safe delivery over speed:** persist decisions in SQLite and require an explicit send command. Gemini is primary, Groq fallback; saved decisions avoid unnecessary repeated calls.
 
-## Language providers
+I used **Codex in Plan mode** and **Ponytail** to guide small, beginner-readable changes and purposeful comments. Where the brief was unclear, I treated **P1 as urgency, not necessarily handoff** when the FAQ provides an approved outage-status page.
 
-Gemini (`GEMINI_MODEL`, default `gemini-3.5-flash-lite`) is the default
-primary provider. Groq (`GROQ_MODEL`, default `qwen/qwen3.8-27b`) is the
-default fallback. Set `LANGUAGE_PRIMARY` and `LANGUAGE_FALLBACK` to reverse
-the order; use only `gemini` or `groq`, and keep the values different.
+## Reliability
 
-Run `nordavo health-check` to check both providers before processing tickets.
-Each receives only redacted, untrusted ticket text. During normal work, if
-both providers fail for a ticket, that command stops safely.
+**503:** up to three attempts with backoff. **429:** obey `Retry-After`, with requests paced at five/second. **409:** stop; do not retry an already-handled ticket. Before sending, SQLite records `sending`; after a crash, a Helpdesk status check prevents blindly repeating an action. Logs keep allow-listed metadata; ticket instructions are untrusted and card/IBAN patterns are redacted before storage and model calls. **Limitations:** CVC/expiry redaction needs strengthening; optional raw-error output may expose customer data.
 
-## Data and privacy
+## Eval and fix
 
-The SQLite database stores only redacted ticket text. `ticket_state` is the
-language cache used by decisions. `language_phase_1_examples` stores the ten
-example predictions and `language_phase_1_testing` stores open-ticket language
-predictions. Example labels are never stored or compared. Set
-`NORDAVO_DB_PATH` to put that database elsewhere.
+The uploaded test run reports **73 tests: 72 passed, 1 live-provider test skipped**. After changes to FAQ and feature-request prompts, **replies rose from 11 to 14 on 29 comparable tickets** (handoffs 17 → 14). This is **not an accuracy score**: the models differed across runs, and the required **10 labelled examples were analyzed but not scored before/after**.
 
-## Decisions and sending
+**Illustrative cost per 100 tickets (Gemini only):** using approximately 2,000 input/162 output tokens from 18 logged Groq decisions as a size proxy, plus an *assumed* 100 input/20 output for language detection: `100 × [(2,100 × $0.30 + 182 × $2.50) / 1,000,000] = $0.1085 ≈ $0.11`. [Gemini prices](https://ai.google.dev/gemini-api/docs/pricing). **Not a measured bill**; excludes fallbacks/retries.
 
-`nordavo decide` redacts a ticket, reuses its saved language result where
-possible, gives the complete FAQ to the configured model pair, validates the
-result, and stores the decision in SQLite. It never sends a Helpdesk action.
+## What I would improve
 
-`nordavo run --send` first performs that same safe decision pass, then sends
-only already-persisted decisions. The sender marks a row `sending` before a
-POST; a restart checks that ticket before resending it. Temporary 503 and 429
-responses retry, 409 is treated as already handled, and 400/422 become a
-visible `send_failed` ledger row. Each attempt writes one safe JSON line to
-`logs/` with no customer text or draft.
-
-The model chooses reply, handoff, or close. A final code check turns malformed,
-payment-leaking, wrong-language, or always-human reply/close decisions into a
-handoff. The decision prompt always receives the full unchanged FAQ—there is
-no RAG or retrieval layer.
-
-## Reset local records
-
-`nordavo analyze --reset` clears the local language cache and both Phase-1
-review tables. `nordavo decide --reset` also clears saved decisions. Reset
-deletes local SQLite rows only: it never changes Helpdesk tickets and is
-blocked for `nordavo run --send` to preserve duplicate-send protection.
+**Next:** make Groq's decision output schema-constrained and regression-test the JSON-format failure observed during fallback. **Brief clarification:** explicitly distinguish a P1 outage requiring immediate escalation from one that permits a documented status-page reply.
