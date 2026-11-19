@@ -76,10 +76,13 @@ class GeminiDecisionClassifier:
                 system_instruction=system_prompt,
                 generation_config={"temperature": 0},
                 response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "roosterly_decision",
+                    "strict": True,
                     "schema": _DecisionResponse.model_json_schema(),
                 },
+            },
             )
             return _result_from_json(
                 response.output_text, "gemini", self._model, _usage(response)
