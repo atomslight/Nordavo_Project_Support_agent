@@ -26,7 +26,7 @@ nordavo decide --verbose
 
 1. **Dutch-first, multilingual support:** detect Dutch, English, or German separately, then verify reply language; human handoff notes stay in English.
 2. **FAQ-grounded decisions:** send the full supplied FAQ to the model; validate its structured output and treat customer text as untrusted to reduce unsupported answers and prompt injection.
-3. **Safe delivery over speed:** persist decisions in SQLite and require an explicit send command. Gemini is primary, Groq fallback; saved decisions avoid unnecessary repeated calls.
+3. **Safe delivery over speed:** persist decisions in SQLite and require an explicit send command. Groq is primary, Gemini fallback; saved decisions avoid unnecessary repeated calls.
 
 I used **Codex in Plan mode** and **Ponytail** to guide small, beginner-readable changes and purposeful comments. Where the brief was unclear, I treated **P1 as urgency, not necessarily handoff** when the FAQ provides an approved outage-status page.
 
@@ -40,6 +40,7 @@ The uploaded test run reports **73 tests: 72 passed, 1 live-provider test skippe
 
 **Illustrative cost per 100 tickets (Gemini only):** using approximately 2,000 input/162 output tokens from 18 logged Groq decisions as a size proxy, plus an *assumed* 100 input/20 output for language detection: `100 × [(2,100 × $0.30 + 182 × $2.50) / 1,000,000] = $0.1085 ≈ $0.11`. [Gemini prices](https://ai.google.dev/gemini-api/docs/pricing). **Not a measured bill**; excludes fallbacks/retries.
 
+
 ## What I would improve
 
-**Next:** make Groq's decision output schema-constrained and regression-test the JSON-format failure observed during fallback. **Brief clarification:** explicitly distinguish a P1 outage requiring immediate escalation from one that permits a documented status-page reply.
+**Next:** improve error handling with smarter retries, rate-limit-aware backoff, timeout recovery, and clearer failure diagnostics. **Brief clarification:** explicitly distinguish a P1 outage requiring immediate escalation from one that permits a documented status-page reply.
