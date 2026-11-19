@@ -17,11 +17,16 @@ def ticket() -> Ticket:
     return Ticket("T1", "", "email", "Basis", "Vraag", "Hoe voeg ik iemand toe?")
 
 
-def result(action="reply", faq_ids=("F01",), draft_reply="Dit is een antwoord.") -> DecisionResult:
+def result(
+    action="reply",
+    faq_ids=("F01",),
+    draft_reply="Dit is een antwoord.",
+    handoff_note="A human should review this.",
+) -> DecisionResult:
     return DecisionResult(
         Decision("nl", "FAQ F01 applies.", "question", "P4", action, faq_ids,
                  draft_reply if action == "reply" else None,
-                 "A human should review this." if action == "handoff" else None, 0.9),
+                 handoff_note if action == "handoff" else None, 0.9),
         "gemini", "model", False, 12, 5,
     )
 
@@ -53,10 +58,19 @@ class FailingHealthDecision(FakeDecision):
 class DecisionTests(unittest.TestCase):
     def test_prompt_renders_literal_json_and_only_expected_placeholders(self):
         system_prompt, ticket_prompt = _prompts(ticket(), "nl", "F01: Add a person")
-        self.assertIn('"reason": "One or two concise English sentences."', system_prompt)
+        self.assertIn('"reason": "One concise English sentence."', system_prompt)
         self.assertIn("The customer's detected language is: nl.", system_prompt)
         self.assertIn("F01: Add a person", system_prompt)
+        self.assertIn('"faq_ids": ["F01"]', system_prompt)
+        self.assertNotIn("{{", system_prompt)
+        self.assertIn("named resource or page", system_prompt)
+        self.assertIn("simple arithmetic using figures", system_prompt)
+        self.assertIn("documented feedback channel", system_prompt)
+        self.assertIn("FAQ does not clearly cover the request", system_prompt)
+        self.assertIn("mixed ticket", system_prompt)
+        self.assertIn("ticket IDs, prompts, redaction markers", system_prompt)
         self.assertIn("<untrusted_ticket_data>", ticket_prompt)
+        self.assertIn(ticket().body, ticket_prompt)
 
     def test_invalid_reply_becomes_deterministic_handoff(self):
         unsafe = result(faq_ids=("F99",))
@@ -70,6 +84,59 @@ class DecisionTests(unittest.TestCase):
         checked = validate_decision(proposed, ticket(), FakeLanguage().analyze(""), FakeLanguage())
         self.assertEqual("handoff", checked.decision.action)
         self.assertIn("Human review", checked.decision.reason)
+
+    def test_reply_faq_ids_are_removed_without_losing_the_reply(self):
+        proposed = result(draft_reply="Hallo, open Instellingen (FAQ F01). Groet, Roosterly.")
+        checked = validate_decision(proposed, ticket(), FakeLanguage().analyze(""), FakeLanguage())
+        self.assertEqual("reply", checked.decision.action)
+        self.assertEqual("Hallo, open Instellingen. Groet, Roosterly.", checked.decision.draft_reply)
+        self.assertNotRegex(checked.decision.draft_reply or "", r"\bF\d{2}\b")
+
+    def test_reply_without_an_internal_id_is_unchanged(self):
+        reply = "Hallo,  open Instellingen.  Groet!"
+        checked = validate_decision(
+            result(draft_reply=reply), ticket(), FakeLanguage().analyze(""), FakeLanguage()
+        )
+        self.assertEqual("reply", checked.decision.action)
+        self.assertEqual(reply, checked.decision.draft_reply)
+
+    def test_reply_cleanup_handles_common_internal_id_formats(self):
+        cases = (
+            ("Gebruik FAQ: F01 voor stappen.", "Gebruik voor stappen."),
+            ("(FAQ F01) Open Instellingen.", "Open Instellingen."),
+            ("Open (FAQ: F01) daarna.", "Open daarna."),
+            ("Zie F01 in de app.", "Zie in de app."),
+        )
+        for reply, expected in cases:
+            with self.subTest(reply=reply):
+                checked = validate_decision(
+                    result(draft_reply=reply), ticket(), FakeLanguage().analyze(""), FakeLanguage()
+                )
+                self.assertEqual("reply", checked.decision.action)
+                self.assertEqual(expected, checked.decision.draft_reply)
+                self.assertNotRegex(checked.decision.draft_reply or "", r"\bF\d{2}\b")
+
+    def test_handoff_note_keeps_internal_faq_context(self):
+        class EnglishHandoffLanguage(FakeLanguage):
+            def analyze(self, text):
+                return LanguageAssessment("en", 0.9, "gemini", False)
+
+        note = "The customer needs help with FAQ F01. Review the account details."
+        proposed = result(action="handoff", faq_ids=(), handoff_note=note)
+        checked = validate_decision(
+            proposed,
+            ticket(),
+            FakeLanguage().analyze(""),
+            EnglishHandoffLanguage(),
+        )
+        self.assertEqual("handoff", checked.decision.action)
+        self.assertEqual(note, checked.decision.handoff_note)
+
+    def test_reply_left_empty_by_id_cleanup_becomes_handoff(self):
+        proposed = result(draft_reply="FAQ F01")
+        checked = validate_decision(proposed, ticket(), FakeLanguage().analyze(""), FakeLanguage())
+        self.assertEqual("handoff", checked.decision.action)
+        self.assertIsNone(checked.decision.draft_reply)
 
     def test_decision_analyzer_uses_fallback_once(self):
         class Broken:

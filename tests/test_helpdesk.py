@@ -100,6 +100,7 @@ class HelpdeskTests(unittest.TestCase):
         self.assertEqual("POST", requests[0].get_method())
         self.assertTrue(requests[0].full_url.endswith("/tickets/T1/reply"))
         self.assertIn(b'"draft_reply": "Antwoord"', requests[0].data)
+        self.assertNotIn(b'"faq_ids"', requests[0].data)
 
     def test_handled_field_is_the_only_recovery_signal(self):
         responses = iter([

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import replace
 from typing import Literal
 
@@ -14,6 +15,9 @@ from nordavo.ai.safety import delimit_ticket_text, redact_sensitive
 from nordavo.models import Decision, DecisionResult, LanguageAssessment, Ticket
 
 FAQ_IDS = frozenset(f"F{number:02d}" for number in range(1, 13))
+_INTERNAL_FAQ_REFERENCE = re.compile(
+    r"\s*\(?(?:FAQ\s*:?\s*)?\bF\d{2}\b\)?", re.IGNORECASE
+)
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +137,7 @@ class DecisionAnalyzer:
         self._fallback.health_check()
         self._event("health_check", stage="decision")
 
+    #Entry point for decision making from the decision workflow. It first tries the primary provider, and if that fails, it falls back to the secondary provider. It also logs events for auditing purposes.
     def decide(self, ticket: Ticket, language: str, faq_text: str) -> DecisionResult:
         try:
             return replace(
@@ -165,6 +170,13 @@ def validate_decision(
 ) -> DecisionResult:
     """Convert only invalid or explicitly unsafe outgoing work to handoff."""
     decision = result.decision
+    if decision.action == "reply" and decision.draft_reply:
+        # FAQ IDs are internal grounding evidence, never customer-facing text.
+        decision = replace(
+            decision,
+            draft_reply=_remove_internal_faq_references(decision.draft_reply),
+        )
+        result = replace(result, decision=decision)
     unsafe_topic = _always_human_topic(ticket)
     invalid = _invalid_decision(decision)
     if decision.action == "reply":
@@ -194,6 +206,17 @@ def validate_decision(
     else:
         decision = replace(decision, priority=_priority_floor(decision.priority, ticket))
     return replace(result, decision=decision)
+
+
+def _remove_internal_faq_references(text: str) -> str:
+    """Remove internal IDs without changing the meaning of the reply."""
+    if _INTERNAL_FAQ_REFERENCE.search(text) is None:
+        # Leave a valid reply untouched unless an internal reference was removed.
+        return text
+    cleaned = _INTERNAL_FAQ_REFERENCE.sub("", text)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    return cleaned.strip()
 
 
 def _prompts(ticket: Ticket, language: str, faq_text: str) -> tuple[str, str]:

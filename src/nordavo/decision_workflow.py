@@ -44,6 +44,7 @@ class TicketDecisionWorkflow:
             safe_ticket = redact_ticket(raw_ticket)
             self._state.upsert_fetched(safe_ticket)
             language = self._language_for(safe_ticket)
+            # If the language is unknown, mark it unresolved and skip decision-making.
             if language.language == "unknown":
                 self._state.mark_language_unresolved(safe_ticket.id)
                 unresolved_ticket_ids.append(safe_ticket.id)
@@ -59,6 +60,7 @@ class TicketDecisionWorkflow:
                 # another model call just to recreate the same ticket action.
                 reused += 1
                 continue
+            # If the language is known, run the ./ai/decision.py model and save the result.
             result = self._analyzer.decide(safe_ticket, language.language, self._faq_text)
             result = replace(result, decision=replace(result.decision, language=language.language))
             result = validate_decision(result, safe_ticket, language, self._languages)
