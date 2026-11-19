@@ -85,6 +85,14 @@ class StateStore:
         )
         self._connection.commit()
 
+    def mark_language_unresolved(self, ticket_id: str) -> None:
+        """Keep the safe language result, but prevent repeat model calls on rerun."""
+        self._connection.execute(
+            "UPDATE ticket_state SET status='language_unresolved' WHERE ticket_id=?",
+            (ticket_id,),
+        )
+        self._connection.commit()
+
     def get(self, ticket_id: str) -> sqlite3.Row | None:
         return self._connection.execute(
             "SELECT * FROM ticket_state WHERE ticket_id=?", (ticket_id,)

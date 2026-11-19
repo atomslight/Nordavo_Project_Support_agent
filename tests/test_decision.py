@@ -131,6 +131,43 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(1, summary.decided_tickets)
         self.assertEqual("decided", stored["status"])
 
+    def test_unknown_language_is_saved_and_other_tickets_continue(self):
+        second_ticket = Ticket("T2", "", "email", None, "Vraag", "Nog een vraag")
+
+        class OneUnknownLanguage(FakeLanguage):
+            def analyze(self, text):
+                language = "unknown" if "Hoe voeg" in text else "nl"
+                return LanguageAssessment(language, 0.1, "groq", False)
+
+        class Helpdesk:
+            def fetch_examples(self):
+                return []
+
+            def fetch_open_tickets(self):
+                yield ticket()
+                yield second_ticket
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            language_state = StateStore(db_path)
+            decision_state = DecisionStateStore(db_path)
+            try:
+                workflow = TicketDecisionWorkflow(
+                    Helpdesk(), language_state, decision_state, OneUnknownLanguage(),
+                    DecisionAnalyzer(FakeDecision(result()), FakeDecision(result())),
+                    Path("data/knowledgebase/faq.md"),
+                )
+                summary = workflow.decide()
+                unresolved = language_state.get("T1")
+                second_decision = decision_state.get_current(second_ticket)
+            finally:
+                decision_state.close()
+                language_state.close()
+        self.assertEqual(1, summary.language_unresolved_tickets)
+        self.assertEqual(("T1",), summary.unresolved_ticket_ids)
+        self.assertEqual("language_unresolved", unresolved["status"])
+        self.assertEqual("decided", second_decision["status"])
+
     def test_sender_uses_the_saved_decision_once(self):
         class Helpdesk:
             def ticket_is_handled(self, ticket_id):

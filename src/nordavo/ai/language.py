@@ -22,11 +22,13 @@ class LanguageProviderError(RuntimeError):
         *,
         status: int | None = None,
         code: str | int | None = None,
+        raw_error: Exception | None = None,
     ) -> None:
         self.provider = provider
         self.error_type = error_type
         self.status = status
         self.code = code
+        self.raw_error = raw_error
         details = [error_type]
         if status is not None:
             details.append(f"HTTP {status}")
@@ -124,6 +126,7 @@ def _assessment_from_json(output_text: str, provider: Literal["gemini", "groq"])
             provider,
             "ValidationError",
             code=_validation_summary(error),
+            raw_error=error,
         ) from None
     return LanguageAssessment(result.language, result.confidence, provider, False)
 
@@ -142,6 +145,7 @@ def _provider_error(provider: Literal["gemini", "groq"], error: Exception) -> La
         type(error).__name__,
         status=_safe_status(error),
         code=_safe_provider_code(provider, error),
+        raw_error=error,
     )
 
 

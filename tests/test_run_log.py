@@ -6,6 +6,7 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 from nordavo.be.run_log import RunLog
+from nordavo.ai.language import LanguageProviderError
 
 
 class AuditLogTests(unittest.TestCase):
@@ -33,3 +34,16 @@ class AuditLogTests(unittest.TestCase):
             record = json.loads(audit.path.read_text(encoding="utf-8"))
         self.assertEqual("T1", record["ticket_id"])
         self.assertNotIn("body", record)
+
+    def test_raw_error_is_terminal_only(self):
+        secret = "customer secret: NL91ABNA0417164300"
+        raw_error = RuntimeError(secret)
+        wrapped = LanguageProviderError("gemini", "BadRequestError", raw_error=raw_error)
+        with tempfile.TemporaryDirectory() as directory:
+            audit = RunLog("decide", verbose=True, raw_errors=True, directory=Path(directory))
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                audit.failure("language", wrapped)
+            file_text = audit.path.read_text(encoding="utf-8")
+        self.assertIn(secret, stderr.getvalue())
+        self.assertNotIn(secret, file_text)

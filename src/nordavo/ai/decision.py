@@ -27,11 +27,13 @@ class DecisionProviderError(RuntimeError):
         *,
         status: int | None = None,
         code: str | int | None = None,
+        raw_error: Exception | None = None,
     ) -> None:
         self.provider = provider
         self.error_type = error_type
         self.status = status
         self.code = code
+        self.raw_error = raw_error
         details = [error_type]
         if status is not None:
             details.append(f"HTTP {status}")
@@ -206,8 +208,8 @@ def _result_from_json(
 ) -> DecisionResult:
     try:
         response = _DecisionResponse.model_validate_json(output_text)
-    except ValidationError:
-        raise DecisionProviderError(provider, "ValidationError") from None
+    except ValidationError as error:
+        raise DecisionProviderError(provider, "ValidationError", raw_error=error) from None
     decision = Decision(
         language="unknown",  # The trusted Phase 1 result is attached by the workflow.
         reason=response.reason,
@@ -270,6 +272,7 @@ def _provider_error(provider: Literal["gemini", "groq"], error: Exception) -> De
         type(error).__name__,
         status=_safe_status(error),
         code=_safe_provider_code(provider, error),
+        raw_error=error,
     )
 
 

@@ -20,6 +20,8 @@ class DecisionSummary:
     decided_tickets: int
     sent_tickets: int = 0
     example_metrics: dict[str, dict[str, int]] | None = None
+    language_unresolved_tickets: int = 0
+    unresolved_ticket_ids: tuple[str, ...] = ()
 
 
 class TicketDecisionWorkflow:
@@ -39,6 +41,7 @@ class TicketDecisionWorkflow:
         example_metrics = self._evaluate_examples()
         self._event("examples_evaluated", stage="decision", outcome="completed")
         fetched = decided = 0
+        unresolved_ticket_ids: list[str] = []
         for raw_ticket in self._helpdesk.fetch_open_tickets():
             fetched += 1
             # Only this short-lived value contains customer text before redaction.
@@ -46,7 +49,14 @@ class TicketDecisionWorkflow:
             self._state.upsert_fetched(safe_ticket)
             language = self._language_for(safe_ticket)
             if language.language == "unknown":
-                raise DecisionProviderError("language", "UnknownTicketLanguage")
+                self._state.mark_language_unresolved(safe_ticket.id)
+                unresolved_ticket_ids.append(safe_ticket.id)
+                self._event(
+                    "language_unresolved", ticket_id=safe_ticket.id,
+                    provider=language.source, confidence=language.confidence,
+                    outcome="skipped",
+                )
+                continue
             existing = self._decisions.get_current(safe_ticket)
             if existing is not None and existing["status"] in {"decided", "sending", "sent", "already_handled"}:
                 continue
@@ -59,7 +69,11 @@ class TicketDecisionWorkflow:
                         provider=result.provider, model=result.model,
                         input_tokens=result.input_tokens, output_tokens=result.output_tokens)
             decided += 1
-        return DecisionSummary(fetched, decided, example_metrics=example_metrics)
+        return DecisionSummary(
+            fetched, decided, example_metrics=example_metrics,
+            language_unresolved_tickets=len(unresolved_ticket_ids),
+            unresolved_ticket_ids=tuple(unresolved_ticket_ids),
+        )
 
     def _evaluate_examples(self) -> dict[str, dict[str, int]]:
         fields = ("language", "action", "category", "priority")
@@ -86,7 +100,7 @@ class TicketDecisionWorkflow:
 
     def _language_for(self, ticket: Ticket) -> LanguageAssessment:
         row = self._state.get(ticket.id)
-        if row is not None and row["status"] == "analyzed" and row["language"]:
+        if row is not None and row["status"] in {"analyzed", "language_unresolved"} and row["language"]:
             return LanguageAssessment(row["language"], row["confidence"], row["language_source"], bool(row["fallback_used"]))
         result = self._languages.analyze(f"{ticket.subject}\n{ticket.body}")
         self._state.mark_analyzed(ticket.id, result)

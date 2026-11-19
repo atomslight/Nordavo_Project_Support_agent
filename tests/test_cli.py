@@ -48,4 +48,8 @@ class CliTests(unittest.TestCase):
             exit_code = cli.main(["analyze"])
 
         self.assertEqual(4, exit_code)
-        self.assertTrue(stderr.getvalue().startswith(str(safe_error) + " [run_id="))
+        self.assertTrue(stderr.getvalue().startswith(str(safe_error) + " [stage=language run_id="))
+
+    def test_raw_errors_are_rejected_for_sending(self):
+        with self.assertRaises(SystemExit):
+            cli.main(["run", "--send", "--verbose", "--show-raw-errors"])

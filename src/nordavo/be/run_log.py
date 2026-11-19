@@ -15,19 +15,23 @@ from nordavo.models import DecisionResult
 _SAFE_FIELDS = {
     "action", "category", "code", "command", "delay_seconds", "error_type",
     "input_tokens", "model", "outcome", "output_tokens", "priority", "provider",
-    "stage", "status", "ticket_id", "method", "endpoint",
+    "stage", "status", "ticket_id", "method", "endpoint", "confidence",
 }
 
 
 class RunLog:
     """Write safe JSONL events and optionally show safe progress on the console."""
 
-    def __init__(self, command: str, *, verbose: bool = False, directory: Path = Path("logs")) -> None:
+    def __init__(
+        self, command: str, *, verbose: bool = False, raw_errors: bool = False,
+        directory: Path = Path("logs"),
+    ) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.run_id = f"{timestamp}-{uuid4().hex[:8]}"
         self._command = command
         self._verbose = verbose
+        self._raw_errors = raw_errors
         self._path = directory / f"{self.run_id}.jsonl"
 
     @property
@@ -61,6 +65,9 @@ class RunLog:
                 f"[trace] {Path(frame.filename).name}:{frame.lineno} {frame.name} {type(error).__name__}",
                 file=sys.stderr,
             )
+        if self._raw_errors:
+            print("RAW DEBUG ERROR — may contain customer data; do not share it.", file=sys.stderr)
+            print(_raw_error_text(error), file=sys.stderr)
 
     def write(self, ticket_id: str, result: DecisionResult, outcome: str, error: str | None = None) -> None:
         self.event(
@@ -79,3 +86,9 @@ def _safe_error_details(error: Exception) -> dict[str, object]:
         if isinstance(value, (str, int)):
             details[field] = value
     return details
+
+
+def _raw_error_text(error: Exception) -> str:
+    """Terminal-only diagnostics; callers never write this text to JSONL."""
+    raw_error = getattr(error, "raw_error", error)
+    return "".join(traceback.format_exception(type(raw_error), raw_error, raw_error.__traceback__)).rstrip()

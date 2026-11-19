@@ -76,10 +76,12 @@ def _run_decisions(settings: Settings, audit: RunLog, *, send: bool = False):
         )
         summary = workflow.decide()
         return summary if not send else type(summary)(
-            summary.fetched_tickets,
-            summary.decided_tickets,
-            workflow.send(),
-            summary.example_metrics,
+            fetched_tickets=summary.fetched_tickets,
+            decided_tickets=summary.decided_tickets,
+            sent_tickets=workflow.send(),
+            example_metrics=summary.example_metrics,
+            language_unresolved_tickets=summary.language_unresolved_tickets,
+            unresolved_ticket_ids=summary.unresolved_ticket_ids,
         )
     finally:
         decision_store.close()
@@ -100,17 +102,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Show safe stage progress and sanitized traceback frames.",
     )
+    parser.add_argument(
+        "--show-raw-errors",
+        action="store_true",
+        help="Print raw provider errors locally; requires --verbose and cannot be used with run --send.",
+    )
     args = parser.parse_args(argv)
     if args.command == "run" and not args.send:
         parser.error("`nordavo run` requires --send")
     if args.send and args.command != "run":
         parser.error("--send is only valid with `nordavo run`")
+    if args.show_raw_errors and not args.verbose:
+        parser.error("--show-raw-errors requires --verbose")
+    if args.show_raw_errors and args.command == "run":
+        parser.error("--show-raw-errors is not allowed with `nordavo run --send`")
     if args.command not in {"analyze", "decide", "run"}:
         return 2
     if args.debug or args.verbose:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
         logging.getLogger("nordavo").setLevel(logging.DEBUG)
-    audit = RunLog(args.command, verbose=args.verbose)
+    audit = RunLog(args.command, verbose=args.verbose, raw_errors=args.show_raw_errors)
     audit.event("run_started", stage="cli")
     try:
         settings = Settings.from_environment()
@@ -131,7 +142,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _fail(audit: RunLog, stage: str, error: Exception, exit_code: int) -> int:
     audit.failure(stage, error)
-    print(f"{_safe_error_message(error)} [run_id={audit.run_id}]", file=sys.stderr)
+    print(
+        f"{_safe_error_message(error)} [stage={stage} run_id={audit.run_id} audit={audit.path}]",
+        file=sys.stderr,
+    )
     return exit_code
 
 
