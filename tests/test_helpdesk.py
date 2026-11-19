@@ -102,6 +102,21 @@ class HelpdeskTests(unittest.TestCase):
         self.assertIn(b'"draft_reply": "Antwoord"', requests[0].data)
         self.assertNotIn(b'"faq_ids"', requests[0].data)
 
+    def test_posts_the_saved_close_payload_without_customer_text(self):
+        requests = []
+
+        def opener(request, **kwargs):
+            requests.append(request)
+            return FakeResponse({"ok": True})
+
+        client = HelpdeskClient(self.settings, opener=opener)
+        decision = Decision("nl", "Empty ticket with no customer request.", "other", "P4", "close", (), None, None, 1.0)
+        self.assertEqual("sent", client.send_decision("T1", decision))
+        self.assertTrue(requests[0].full_url.endswith("/tickets/T1/close"))
+        self.assertIn(b'"language": "nl"', requests[0].data)
+        self.assertNotIn(b'"draft_reply"', requests[0].data)
+        self.assertNotIn(b'"handoff_note"', requests[0].data)
+
     def test_handled_field_is_the_only_recovery_signal(self):
         responses = iter([
             FakeResponse({"id": "T1", "handled": None}),

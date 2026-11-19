@@ -255,27 +255,63 @@ class DecisionTests(unittest.TestCase):
             db_path = Path(directory) / "state.sqlite3"
             decisions = DecisionStateStore(db_path)
             try:
-                decisions.save_decided(ticket(), result(), LanguageAssessment("nl", 0.9, "gemini", False))
+                decisions.save_decided(ticket(), result(), "nl")
                 decisions.reset_decisions()
                 stored = decisions.get_current(ticket())
             finally:
                 decisions.close()
         self.assertIsNone(stored)
 
-    def test_unknown_language_is_saved_and_other_tickets_continue(self):
+    def test_empty_reply_marker_closes_without_model_calls_and_is_reused(self):
+        empty_ticket = Ticket("T-empty", "", "email", None, "RE: Re:", "")
+
+        class NoModelCalls:
+            def analyze(self, text):
+                raise AssertionError("empty tickets must not call the language model")
+
+            def decide(self, *args):
+                raise AssertionError("empty tickets must not call the decision model")
+
+        class Helpdesk:
+            def fetch_open_tickets(self):
+                yield empty_ticket
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "state.sqlite3"
+            language_state = StateStore(db_path)
+            decision_state = DecisionStateStore(db_path)
+            try:
+                workflow = TicketDecisionWorkflow(
+                    Helpdesk(), language_state, decision_state, NoModelCalls(), NoModelCalls(),
+                    Path("data/knowledgebase/faq.md"),
+                )
+                first_summary = workflow.decide()
+                second_summary = workflow.decide()
+                stored = decision_state.get_current(empty_ticket)
+                saved = decision_state.read_decision(stored)
+            finally:
+                decision_state.close()
+                language_state.close()
+        self.assertEqual(1, first_summary.decided_tickets)
+        self.assertEqual(0, second_summary.decided_tickets)
+        self.assertEqual(1, second_summary.reused_decisions)
+        self.assertEqual("close", saved.action)
+        self.assertEqual("nl", saved.language)
+        self.assertEqual("Empty ticket with no customer request.", saved.reason)
+        self.assertEqual("rule", stored["provider"])
+
+    def test_unknown_language_closes_as_spam_and_other_tickets_continue(self):
+        unknown_ticket = Ticket("T-unknown", "", "email", None, "Vraag", "xqz blrpt")
         second_ticket = Ticket("T2", "", "email", None, "Vraag", "Nog een vraag")
 
         class OneUnknownLanguage(FakeLanguage):
             def analyze(self, text):
-                language = "unknown" if "Hoe voeg" in text else "nl"
+                language = "unknown" if "xqz" in text else "nl"
                 return LanguageAssessment(language, 0.1, "groq", False)
 
         class Helpdesk:
-            def fetch_examples(self):
-                return []
-
             def fetch_open_tickets(self):
-                yield ticket()
+                yield unknown_ticket
                 yield second_ticket
 
         with tempfile.TemporaryDirectory() as directory:
@@ -289,14 +325,19 @@ class DecisionTests(unittest.TestCase):
                     Path("data/knowledgebase/faq.md"),
                 )
                 summary = workflow.decide()
-                unresolved = language_state.get("T1")
+                unknown_state = language_state.get("T-unknown")
+                unknown_row = decision_state.get_current(unknown_ticket)
+                unknown_decision = decision_state.read_decision(unknown_row)
                 second_decision = decision_state.get_current(second_ticket)
             finally:
                 decision_state.close()
                 language_state.close()
-        self.assertEqual(1, summary.language_unresolved_tickets)
-        self.assertEqual(("T1",), summary.unresolved_ticket_ids)
-        self.assertEqual("language_unresolved", unresolved["status"])
+        self.assertEqual(0, summary.language_unresolved_tickets)
+        self.assertEqual("analyzed", unknown_state["status"])
+        self.assertEqual("unknown", unknown_state["language"])
+        self.assertEqual("close", unknown_decision.action)
+        self.assertEqual("No supported customer language was identified; ticket marked as spam.", unknown_decision.reason)
+        self.assertEqual("rule", unknown_row["provider"])
         self.assertEqual("decided", second_decision["status"])
 
     def test_sender_uses_the_saved_decision_once(self):
@@ -313,8 +354,7 @@ class DecisionTests(unittest.TestCase):
             decisions = DecisionStateStore(db_path)
             helpdesk = Helpdesk()
             try:
-                language = LanguageAssessment("nl", 0.9, "gemini", False)
-                decisions.save_decided(ticket(), result(), language)
+                decisions.save_decided(ticket(), result(), "nl")
                 workflow = TicketDecisionWorkflow(helpdesk, None, decisions, None, None, Path("data/knowledgebase/faq.md"))
                 sent = workflow.send()
                 stored = decisions.get_current(ticket())
@@ -336,7 +376,7 @@ class DecisionTests(unittest.TestCase):
             db_path = Path(directory) / "state.sqlite3"
             decisions = DecisionStateStore(db_path)
             try:
-                decisions.save_decided(ticket(), result(), LanguageAssessment("nl", 0.9, "gemini", False))
+                decisions.save_decided(ticket(), result(), "nl")
                 decisions.mark("T1", "sending")
                 workflow = TicketDecisionWorkflow(Helpdesk(), None, decisions, None, None, Path("data/knowledgebase/faq.md"))
                 self.assertEqual(0, workflow.send())

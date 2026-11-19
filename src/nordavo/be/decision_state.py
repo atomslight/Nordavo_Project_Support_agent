@@ -7,7 +7,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from nordavo.models import Decision, DecisionResult, LanguageAssessment, Ticket
+from nordavo.models import Decision, DecisionResult, Ticket
 
 
 class DecisionStateStore:
@@ -37,7 +37,7 @@ class DecisionStateStore:
             (ticket.id, _content_hash(ticket)),
         ).fetchone()
 
-    def save_decided(self, ticket: Ticket, result: DecisionResult, language: LanguageAssessment) -> None:
+    def save_decided(self, ticket: Ticket, result: DecisionResult, language: str) -> None:
         decision = result.decision
         payload = json.dumps(_decision_dict(decision), ensure_ascii=False, sort_keys=True)
         self._connection.execute(
@@ -53,7 +53,7 @@ class DecisionStateStore:
                 input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
                 status='decided', updated_at=CURRENT_TIMESTAMP
             """,
-            (ticket.id, _content_hash(ticket), language.language, payload, result.provider,
+            (ticket.id, _content_hash(ticket), language, payload, result.provider,
              result.model, int(result.fallback_used), result.input_tokens, result.output_tokens),
         )
         self._connection.commit()

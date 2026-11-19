@@ -5,6 +5,7 @@ from typing import Literal
 
 LanguageCode = Literal["nl", "en", "de", "unknown"]
 LanguageSource = Literal["gemini", "groq"]
+DecisionProvider = Literal["gemini", "groq", "rule"]
 DecisionAction = Literal["reply", "handoff", "close"]
 DecisionCategory = Literal["bug", "billing", "feature_request", "question", "other"]
 Priority = Literal["P1", "P2", "P3", "P4"]
@@ -65,7 +66,7 @@ class DecisionResult:
     """A decision plus only the provider metadata needed for safe run logs."""
 
     decision: Decision
-    provider: LanguageSource
+    provider: DecisionProvider
     model: str
     fallback_used: bool
     input_tokens: int | None

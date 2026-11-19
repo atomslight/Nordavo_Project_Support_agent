@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -11,7 +12,12 @@ from nordavo.be.decision_state import DecisionStateStore
 from nordavo.be.helpdesk import HelpdeskError
 from nordavo.be.run_log import RunLog
 from nordavo.be.state import StateStore
-from nordavo.models import DecisionResult, LanguageAssessment, Ticket
+from nordavo.models import Decision, DecisionResult, LanguageAssessment, Ticket
+
+
+_REPLY_ONLY_SUBJECT = re.compile(r"(?:re:\s*)+", re.IGNORECASE)
+_EMPTY_TICKET_LANGUAGE = "nl"
+_REUSABLE_DECISION_STATUSES = {"decided", "sending", "sent", "already_handled"}
 
 
 @dataclass(frozen=True)
@@ -37,44 +43,46 @@ class TicketDecisionWorkflow:
 
     def decide(self) -> DecisionSummary:
         fetched = decided = reused = 0
-        unresolved_ticket_ids: list[str] = []
         for raw_ticket in self._helpdesk.fetch_open_tickets():
             fetched += 1
             # Only this short-lived value contains customer text before redaction.
             safe_ticket = redact_ticket(raw_ticket)
             self._state.upsert_fetched(safe_ticket)
-            language = self._language_for(safe_ticket)
-            # If the language is unknown, mark it unresolved and skip decision-making.
-            if language.language == "unknown":
-                self._state.mark_language_unresolved(safe_ticket.id)
-                unresolved_ticket_ids.append(safe_ticket.id)
-                self._event(
-                    "language_unresolved", ticket_id=safe_ticket.id,
-                    provider=language.source, confidence=language.confidence,
-                    outcome="skipped",
-                )
-                continue
             existing = self._decisions.get_current(safe_ticket)
-            if existing is not None and existing["status"] in {"decided", "sending", "sent", "already_handled"}:
+            if existing is not None and existing["status"] in _REUSABLE_DECISION_STATUSES:
                 # A matching saved decision is safe to reuse; do not spend
                 # another model call just to recreate the same ticket action.
                 reused += 1
+                continue
+            # Empty email metadata has no customer language worth sending to a model.
+            if _is_empty_ticket(safe_ticket):
+                self._save_decision(safe_ticket, _rule_close(
+                    "Empty ticket with no customer request.", "empty-ticket-rule"
+                ))
+                decided += 1
+                continue
+            language = self._language_for(safe_ticket)
+            if language.language == "unknown":
+                self._save_decision(safe_ticket, _rule_close(
+                    "No supported customer language was identified; ticket marked as spam.",
+                    "unknown-language-rule",
+                ))
+                decided += 1
                 continue
             # If the language is known, run the ./ai/decision.py model and save the result.
             result = self._analyzer.decide(safe_ticket, language.language, self._faq_text)
             result = replace(result, decision=replace(result.decision, language=language.language))
             result = validate_decision(result, safe_ticket, language, self._languages)
-            self._decisions.save_decided(safe_ticket, result, language)
-            self._event("decision_saved", ticket_id=safe_ticket.id, action=result.decision.action,
-                        category=result.decision.category, priority=result.decision.priority,
-                        provider=result.provider, model=result.model,
-                        input_tokens=result.input_tokens, output_tokens=result.output_tokens)
+            self._save_decision(safe_ticket, result)
             decided += 1
-        return DecisionSummary(
-            fetched, decided, reused,
-            language_unresolved_tickets=len(unresolved_ticket_ids),
-            unresolved_ticket_ids=tuple(unresolved_ticket_ids),
-        )
+        return DecisionSummary(fetched, decided, reused)
+
+    def _save_decision(self, ticket: Ticket, result: DecisionResult) -> None:
+        self._decisions.save_decided(ticket, result, result.decision.language)
+        self._event("decision_saved", ticket_id=ticket.id, action=result.decision.action,
+                    category=result.decision.category, priority=result.decision.priority,
+                    provider=result.provider, model=result.model,
+                    input_tokens=result.input_tokens, output_tokens=result.output_tokens)
 
     def _language_for(self, ticket: Ticket) -> LanguageAssessment:
         row = self._state.get(ticket.id)
@@ -119,3 +127,26 @@ class TicketDecisionWorkflow:
     def _event(self, name: str, **details) -> None:
         if self._audit:
             self._audit.event(name, **details)
+
+
+def _is_empty_ticket(ticket: Ticket) -> bool:
+    subject = ticket.subject.strip()
+    return not ticket.body.strip() and (
+        not subject or _REPLY_ONLY_SUBJECT.fullmatch(subject) is not None
+    )
+
+
+def _rule_close(reason: str, model: str) -> DecisionResult:
+    # A close still needs a supported language, even when the ticket has none.
+    decision = Decision(
+        language=_EMPTY_TICKET_LANGUAGE,
+        reason=reason,
+        category="other",
+        priority="P4",
+        action="close",
+        faq_ids=(),
+        draft_reply=None,
+        handoff_note=None,
+        confidence=1.0,
+    )
+    return DecisionResult(decision, "rule", model, False, None, None)
