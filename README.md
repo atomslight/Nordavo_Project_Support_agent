@@ -18,6 +18,7 @@ python -m unittest discover -s tests -v
 nordavo health-check
 nordavo analyze
 nordavo decide --verbose
+nordavo run --send --verbose (Final POST After all checks and decision)
 ```
 
 `analyze` detects languages; `decide` saves proposed actions **without sending**. Only `nordavo run --send` submits actions to the Helpdesk—use it only when authorized. The FAQ must exist at `data/knowledgebase/faq.md` (not included in the reviewed uploads).
