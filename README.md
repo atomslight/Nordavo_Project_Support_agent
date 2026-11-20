@@ -1,41 +1,5 @@
 # Nordavo — AI Support Ticket Agent
-flowchart TD
-    Start["nordavo command"] --> Choice{Command?}
 
-    Choice -->|health-check| Health["Check Gemini + Groq<br/>language and decision calls"]
-    Health --> HealthResult["Print healthy JSON<br/>No Helpdesk, SQLite, or POST"]
-
-    Choice -->|analyze| Analyze["Fetch 10 examples + open tickets"]
-    Analyze --> RedactA["Redact sensitive data"]
-    RedactA --> Detect["LanguageAnalyzer<br/>Gemini primary → Groq fallback"]
-    Detect --> Phase1DB["Save redacted results<br/>in Phase-1 SQLite tables"]
-    Phase1DB --> AnalyzeResult["Print language summary<br/>No POST"]
-
-    Choice -->|decide| Decide["Fetch open tickets"]
-    Choice -->|run --send| Decide
-
-    Decide --> RedactD["Redact ticket"]
-    RedactD --> Existing{Reusable saved decision?}
-    Existing -->|Yes| Reuse["Reuse saved decision"]
-    Existing -->|No| Empty{Empty Re: ticket?}
-
-    Empty -->|Yes| RuleClose["Create deterministic close"]
-    Empty -->|No| DetectDecisionLanguage["Get cached language<br/>or classify ticket"]
-
-    DetectDecisionLanguage --> Unknown{Language unknown?}
-    Unknown -->|Yes| SpamClose["Create deterministic spam close"]
-    Unknown -->|No| ModelDecision["Decision model<br/>FAQ + prompt + safe ticket"]
-
-    ModelDecision --> Validator["Validate fields, FAQ IDs,<br/>language, unsafe content"]
-    Validator --> SaveDecision["Save decision in SQLite<br/>status = decided"]
-
-    Reuse --> SendChoice{run --send?}
-    RuleClose --> SendChoice
-    SpamClose --> SendChoice
-    SaveDecision --> SendChoice
-
-    SendChoice -->|No| DecideResult["Print decision summary"]
-    SendChoice -->|Yes| Send["Send saved decisions only"]
 Nordavo is a Python command-line support agent for Roosterly. It reads helpdesk tickets, checks the supplied FAQ, and prepares a **reply, human handoff, or spam closure**. Decisions are reviewed and saved locally before any customer-facing action is explicitly authorized.
 
 ## How to run
