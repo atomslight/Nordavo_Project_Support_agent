@@ -1,4 +1,5 @@
 # Nordavo — AI Support Ticket Agent
+<img width="3790" height="1928" alt="mermaid-diagram (4)" src="https://github.com/user-attachments/assets/c9c88f5b-98bc-4ec0-b1d9-d71dbde10f79" />
 
 Nordavo is a Python command-line support agent for Roosterly. It reads helpdesk tickets, checks the supplied FAQ, and prepares a **reply, human handoff, or spam closure**. Decisions are reviewed and saved locally before any customer-facing action is explicitly authorized.
 
