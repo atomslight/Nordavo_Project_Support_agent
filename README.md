@@ -45,3 +45,5 @@ The uploaded test run reports **73 tests: 72 passed, 1 live-provider test skippe
 ## What I would improve
 
 **Next:** improve error handling with smarter retries, rate-limit-aware backoff, timeout recovery, and clearer failure diagnostics. **Brief clarification:** explicitly distinguish a P1 outage requiring immediate escalation from one that permits a documented status-page reply.
+
+As the knowledge base scales, introduce RAG with LangChain, LangGraph, and a vector database (PostgreSQL/pgvector, ChromaDB, or Qdrant) for efficient retrieval, scalable workflows, and grounded responses while preserving safety checks and human escalation.
